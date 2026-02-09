@@ -5,13 +5,26 @@ import fs from 'fs';
 
 // Helper to get binary path
 const getBinaryPath = () => {
-    // Check common paths
-    const localPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp.exe');
-    if (fs.existsSync(localPath)) return localPath;
+    // Detect OS
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
 
-    // Fallback or linux/mac (just 'yt-dlp' if in path, or checks other locs)
-    // For this user on Windows, the above should work.
-    return path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+    // In Vercel, node_modules are often capable of being found via process.cwd()
+    // but sometimes the structure is flattened.
+    // 'youtube-dl-exec' usually puts the binary in its own bin folder.
+
+    const possiblePaths = [
+        path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+        path.join(process.cwd(), 'bin', binaryName), // Custom bin?
+        path.join('/tmp', binaryName) // If we were to download it there
+    ];
+
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
+    }
+
+    // Fallback: rely on youtube-dl-exec's internal discovery or global path
+    return null;
 }
 
 export async function GET(request: Request) {
@@ -24,9 +37,14 @@ export async function GET(request: Request) {
 
     try {
         const binaryPath = getBinaryPath();
-        const youtubedl = create(binaryPath);
 
-        // dumpSingleJson: true gives us all metadata in JSON format
+        // If we found a specific path, use it. Otherwise let the lib try default.
+        const youtubedl = binaryPath ? create(binaryPath) : create(path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'));
+
+        // LOGGING FOR DEBUGGING
+        console.log("OS:", process.platform);
+        console.log("Binary Path used:", binaryPath);
+
         const output = await youtubedl(url, {
             dumpSingleJson: true,
             noCheckCertificates: true,
@@ -48,9 +66,10 @@ export async function GET(request: Request) {
             author: output.uploader,
             formats: options
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching video info:", error);
-        return NextResponse.json({ error: 'Failed to fetch video info' }, { status: 500 });
+        // Return detailed error for debugging
+        return NextResponse.json({ error: 'Failed to fetch info', details: error.message || error.toString() }, { status: 500 });
     }
 }
 

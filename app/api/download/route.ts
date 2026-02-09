@@ -5,9 +5,19 @@ import fs from 'fs';
 
 // Helper to get binary path
 const getBinaryPath = () => {
-    const localPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp.exe');
-    if (fs.existsSync(localPath)) return localPath;
-    return path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+
+    const possiblePaths = [
+        path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    ];
+
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
+    }
+
+    // Default fallback (might fail if not in PATH)
+    return isWindows ? 'yt-dlp.exe' : 'yt-dlp';
 }
 
 export async function GET(request: Request) {
@@ -27,8 +37,8 @@ export async function GET(request: Request) {
         headers.set('Content-Type', type === 'mp3' ? 'audio/mpeg' : 'video/mp4');
 
         const binaryPath = getBinaryPath();
+        console.log("Download Route - Binary Path:", binaryPath);
 
-        // Construct args for yt-dlp
         const args = [
             url,
             '--output', '-',
@@ -48,16 +58,13 @@ export async function GET(request: Request) {
             else args.push('--format', 'best');
         }
 
-        // Spawn the process
         const subprocess = spawn(binaryPath, args);
 
-        // Create a ReadableStream from the stdout
         const readable = new ReadableStream({
             start(controller) {
                 subprocess.stdout.on('data', (chunk) => controller.enqueue(chunk));
                 subprocess.stdout.on('end', () => controller.close());
                 subprocess.stdout.on('error', (err) => controller.error(err));
-                // Handle stderr for logging
                 subprocess.stderr.on('data', (data) => console.log('yt-dlp stderr:', data.toString()));
             },
             cancel() {
