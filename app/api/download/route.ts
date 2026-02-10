@@ -43,6 +43,13 @@ export async function GET(request: Request) {
         if (isYouTube) {
             console.log("Detected YouTube URL for download, using @distube/ytdl-core");
 
+            // Add cookies to agent
+            const agent = ytdl.createAgent([
+                { name: "POT_VISITOR_INFO_1_LIVE", value: "V2fP9J9_jXo" },
+                { name: "YSC", value: "C7F8d39X5k" },
+                { name: "GPS", value: "1" }
+            ]);
+
             let downloadStream;
             const requestOptions = {
                 headers: {
