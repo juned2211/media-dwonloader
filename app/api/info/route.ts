@@ -36,7 +36,7 @@ export async function GET(request: Request) {
         const isYouTube = ytdl.validateURL(url);
 
         if (isYouTube) {
-            console.log("Detected YouTube URL, using Piped API Proxy (Bypassing Vercel IP)");
+            console.log("Detected YouTube URL, using Proxy APIs (Bypassing Vercel IP)");
 
             // Extract Video ID
             let videoId = "";
@@ -50,77 +50,132 @@ export async function GET(request: Request) {
 
             if (!videoId) throw new Error("Could not extract Video ID");
 
-            // Fetch from Piped API
-            // Using a rotation of reliable instances if one fails
-            const pipedInstances = [
-                'https://pipedapi.kavin.rocks',
-                'https://api.piped.video',
-                'https://pipedapi.tokhmi.xyz'
+            // Definition of Proxy APIs
+            const PROXIES = [
+                // 1. Piped Instances (Try these first)
+                {
+                    type: 'piped',
+                    url: 'https://pipedapi.kavin.rocks',
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+                },
+                {
+                    type: 'piped',
+                    url: 'https://api.piped.video',
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+                },
+                {
+                    type: 'piped',
+                    url: 'https://pipedapi.tokhmi.xyz',
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+                },
+                // 2. Invidious Instances (Fallback)
+                { type: 'invidious', url: 'https://inv.nadeko.net' },
+                { type: 'invidious', url: 'https://yewtu.be' },
+                { type: 'invidious', url: 'https://invidious.privacydev.net' },
+                { type: 'invidious', url: 'https://invidious.drgns.space' }
             ];
 
             let data;
-            for (const instance of pipedInstances) {
+            let usedProxyType = '';
+
+            for (const proxy of PROXIES) {
                 try {
-                    console.log(`Fetching from ${instance}...`);
-                    const response = await fetch(`${instance}/streams/${videoId}`);
+                    console.log(`Fetching from ${proxy.type} (${proxy.url})...`);
+
+                    let fetchUrl = '';
+                    if (proxy.type === 'piped') {
+                        fetchUrl = `${proxy.url}/streams/${videoId}`;
+                    } else {
+                        fetchUrl = `${proxy.url}/api/v1/videos/${videoId}`;
+                    }
+
+                    const response = await fetch(fetchUrl, {
+                        headers: proxy.headers || {}
+                    });
+
                     if (response.ok) {
                         data = await response.json();
+                        usedProxyType = proxy.type;
                         break;
+                    } else {
+                        console.log(`Failed ${proxy.url}: ${response.status}`);
                     }
                 } catch (e) {
-                    console.log(`Failed to fetch from ${instance}`);
+                    console.log(`Error connecting to ${proxy.url}:`, e);
                 }
             }
 
-            if (!data) throw new Error("All Piped instances failed to fetch video info.");
+            if (!data) throw new Error("All Proxy APIs (Piped & Invidious) failed.");
 
-            // Map Piped Response
-            const formats = [];
+            // Map Response based on Proxy Type
+            const formats: any[] = [];
 
-            // Video Streams
-            if (data.videoStreams) {
-                data.videoStreams.forEach((s: any) => {
-                    if (!s.videoOnly) { // Muxed streams (Audio+Video)
+            if (usedProxyType === 'piped') {
+                // Map Piped
+                if (data.videoStreams) {
+                    data.videoStreams.forEach((s: any) => {
+                        if (!s.videoOnly) {
+                            formats.push({
+                                quality: s.quality || "720p",
+                                type: "mp4",
+                                label: `Video ${s.quality}`,
+                                url: s.url,
+                                direct: true
+                            });
+                        }
+                    });
+                }
+                if (data.audioStreams) {
+                    const bestAudio = data.audioStreams.find((s: any) => s.mimeType === "audio/mp4") || data.audioStreams[0];
+                    if (bestAudio) {
                         formats.push({
-                            quality: s.quality || "720p",
-                            type: "mp4",
-                            label: `Video ${s.quality}`,
-                            url: s.url,
+                            quality: "Highest",
+                            type: "mp3",
+                            label: "Audio Only",
+                            url: bestAudio.url,
+                            isAudio: true,
                             direct: true
                         });
                     }
-                });
-
-                // If no muxed streams, add video-only but label them (Client might need to know)
-                // For simplicity, we just look for best muxed.
-                // Piped usually provides webm/mp4 muxed.
-            }
-
-            // Audio Streams
-            if (data.audioStreams) {
-                const bestAudio = data.audioStreams.find((s: any) => s.mimeType === "audio/mp4") || data.audioStreams[0];
-                if (bestAudio) {
-                    formats.push({
-                        quality: "Highest",
-                        type: "mp3",
-                        label: "Audio Only",
-                        url: bestAudio.url,
-                        isAudio: true,
-                        direct: true
+                }
+            } else if (usedProxyType === 'invidious') {
+                // Map Invidious
+                if (data.formatStreams) {
+                    data.formatStreams.forEach((s: any) => {
+                        formats.push({
+                            quality: s.qualityLabel || s.resolution || "720p",
+                            type: s.container || "mp4",
+                            label: `Video ${s.qualityLabel || s.resolution}`,
+                            url: s.url,
+                            direct: true
+                        });
                     });
+                }
+                // Invidious Audio is usually in adaptiveFormats
+                if (data.adaptiveFormats) {
+                    const bestAudio = data.adaptiveFormats.find((s: any) => s.type.includes("audio/mp4"));
+                    if (bestAudio) {
+                        formats.push({
+                            quality: "Highest",
+                            type: "mp3",
+                            label: "Audio Only",
+                            url: bestAudio.url,
+                            isAudio: true,
+                            direct: true
+                        });
+                    }
                 }
             }
 
-            // Fallback formats if empty (shouldn't happen on Piped usually)
             if (formats.length === 0) {
                 formats.push({ quality: "720p", type: "mp4", label: "Standard", url: "", direct: false });
             }
 
             return NextResponse.json({
                 title: data.title,
-                thumbnail: data.thumbnailUrl,
-                duration: formatDuration(data.duration),
-                author: data.uploader,
+                thumbnail: usedProxyType === 'piped' ? data.thumbnailUrl : (data.videoThumbnails ? data.videoThumbnails[0].url : ""),
+                duration: formatDuration(usedProxyType === 'piped' ? data.duration : data.lengthSeconds),
+                author: usedProxyType === 'piped' ? data.uploader : data.author,
                 formats: formats
             });
         }
