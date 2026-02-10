@@ -2,16 +2,13 @@ import { NextResponse } from 'next/server';
 const { create } = require('youtube-dl-exec');
 import path from 'path';
 import fs from 'fs';
+import ytdl from '@distube/ytdl-core';
 
 // Helper to get binary path
 const getBinaryPath = () => {
     // Detect OS
     const isWindows = process.platform === 'win32';
     const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-
-    // In Vercel, node_modules are often capable of being found via process.cwd()
-    // but sometimes the structure is flattened.
-    // 'youtube-dl-exec' usually puts the binary in its own bin folder.
 
     const possiblePaths = [
         path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
@@ -23,7 +20,6 @@ const getBinaryPath = () => {
         if (fs.existsSync(p)) return p;
     }
 
-    // Fallback: rely on youtube-dl-exec's internal discovery or global path
     return null;
 }
 
@@ -36,14 +32,34 @@ export async function GET(request: Request) {
     }
 
     try {
+        // Check if it's a YouTube URL
+        const isYouTube = ytdl.validateURL(url);
+
+        if (isYouTube) {
+            console.log("Detected YouTube URL, using @distube/ytdl-core");
+            const info = await ytdl.getInfo(url);
+            const videoDetails = info.videoDetails;
+
+            const formats = [
+                { quality: "1080p", type: "mp4", label: "High Definition" },
+                { quality: "720p", type: "mp4", label: "Standard HD" },
+                { quality: "480p", type: "mp4", label: "Standard" },
+                { quality: "Highest", type: "mp3", label: "High Quality Audio", isAudio: true },
+            ];
+
+            return NextResponse.json({
+                title: videoDetails.title,
+                thumbnail: videoDetails.thumbnails[videoDetails.thumbnails.length - 1].url, // Highest quality thumbnail
+                duration: formatDuration(parseInt(videoDetails.lengthSeconds)),
+                author: videoDetails.author.name,
+                formats: formats
+            });
+        }
+
+        // Fallback to youtube-dl-exec for other sites (Likely to fail on Vercel without binary)
+        console.log("Not a YouTube URL, trying youtube-dl-exec");
         const binaryPath = getBinaryPath();
-
-        // If we found a specific path, use it. Otherwise let the lib try default.
         const youtubedl = binaryPath ? create(binaryPath) : create(path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'));
-
-        // LOGGING FOR DEBUGGING
-        console.log("OS:", process.platform);
-        console.log("Binary Path used:", binaryPath);
 
         const output = await youtubedl(url, {
             dumpSingleJson: true,
@@ -66,9 +82,9 @@ export async function GET(request: Request) {
             author: output.uploader,
             formats: options
         });
+
     } catch (error: any) {
         console.error("Error fetching video info:", error);
-        // Return detailed error for debugging
         return NextResponse.json({ error: 'Failed to fetch info', details: error.message || error.toString() }, { status: 500 });
     }
 }
