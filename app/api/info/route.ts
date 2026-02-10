@@ -32,90 +32,127 @@ export async function GET(request: Request) {
     }
 
     try {
-        // Workaround for Vercel EROFS: ytdl-core tries to write to disk on error.
-        // We change CWD to /tmp so it can write there if needed.
-        const originalCwd = process.cwd();
-        try {
-            process.chdir('/tmp');
-        } catch (err) {
-            console.log("Could not change cwd to /tmp (might be local)", err);
-        }
+        // Check if it's a YouTube URL
+        const isYouTube = ytdl.validateURL(url);
 
-        try {
-            // Check if it's a YouTube URL
-            const isYouTube = ytdl.validateURL(url);
+        if (isYouTube) {
+            console.log("Detected YouTube URL, using Piped API Proxy (Bypassing Vercel IP)");
 
-            if (isYouTube) {
-                console.log("Detected YouTube URL, using @distube/ytdl-core");
-
-                // Add robust options for Vercel/Serverless environment
-                // Attempting full desktop headers without cookies first
-                const info = await ytdl.getInfo(url, {
-                    requestOptions: {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Sec-Fetch-Dest': 'document',
-                            'Sec-Fetch-Mode': 'navigate',
-                            'Sec-Fetch-Site': 'none',
-                            'Sec-Fetch-User': '?1',
-                            'Upgrade-Insecure-Requests': '1',
-                            'Cache-Control': 'max-age=0',
-                        }
-                    }
-                });
-                const videoDetails = info.videoDetails;
-
-                const formats = [
-                    { quality: "1080p", type: "mp4", label: "High Definition" },
-                    { quality: "720p", type: "mp4", label: "Standard HD" },
-                    { quality: "480p", type: "mp4", label: "Standard" },
-                    { quality: "Highest", type: "mp3", label: "High Quality Audio", isAudio: true },
-                ];
-
-                return NextResponse.json({
-                    title: videoDetails.title,
-                    thumbnail: videoDetails.thumbnails[videoDetails.thumbnails.length - 1].url, // Highest quality thumbnail
-                    duration: formatDuration(parseInt(videoDetails.lengthSeconds)),
-                    author: videoDetails.author.name,
-                    formats: formats
-                });
+            // Extract Video ID
+            let videoId = "";
+            if (url.includes("v=")) {
+                videoId = url.split("v=")[1].split("&")[0];
+            } else if (url.includes("youtu.be/")) {
+                videoId = url.split("youtu.be/")[1];
+            } else if (url.includes("shorts/")) {
+                videoId = url.split("shorts/")[1].split("?")[0];
             }
 
-            // Fallback to youtube-dl-exec for other sites (Likely to fail on Vercel without binary)
-            console.log("Not a YouTube URL, trying youtube-dl-exec");
-            const binaryPath = getBinaryPath();
-            const youtubedl = binaryPath ? create(binaryPath) : create(path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'));
+            if (!videoId) throw new Error("Could not extract Video ID");
 
-            const output = await youtubedl(url, {
-                dumpSingleJson: true,
-                noCheckCertificates: true,
-                noWarnings: true,
-                preferFreeFormats: true,
-            });
-
-            const options = [
-                { quality: "1080p", type: "mp4", label: "High Definition" },
-                { quality: "720p", type: "mp4", label: "Standard HD" },
-                { quality: "480p", type: "mp4", label: "Standard" },
-                { quality: "Highest", type: "mp3", label: "High Quality Audio", isAudio: true },
+            // Fetch from Piped API
+            // Using a rotation of reliable instances if one fails
+            const pipedInstances = [
+                'https://pipedapi.kavin.rocks',
+                'https://api.piped.video',
+                'https://pipedapi.tokhmi.xyz'
             ];
 
-            return NextResponse.json({
-                title: output.title,
-                thumbnail: output.thumbnail,
-                duration: formatDuration(output.duration),
-                author: output.uploader,
-                formats: options
-            });
-        } finally {
-            try {
-                if (originalCwd) process.chdir(originalCwd);
-            } catch (err) {
-                console.log("Could not restore cwd", err);
+            let data;
+            for (const instance of pipedInstances) {
+                try {
+                    console.log(`Fetching from ${instance}...`);
+                    const response = await fetch(`${instance}/streams/${videoId}`);
+                    if (response.ok) {
+                        data = await response.json();
+                        break;
+                    }
+                } catch (e) {
+                    console.log(`Failed to fetch from ${instance}`);
+                }
             }
+
+            if (!data) throw new Error("All Piped instances failed to fetch video info.");
+
+            // Map Piped Response
+            const formats = [];
+
+            // Video Streams
+            if (data.videoStreams) {
+                data.videoStreams.forEach((s: any) => {
+                    if (!s.videoOnly) { // Muxed streams (Audio+Video)
+                        formats.push({
+                            quality: s.quality || "720p",
+                            type: "mp4",
+                            label: `Video ${s.quality}`,
+                            url: s.url,
+                            direct: true
+                        });
+                    }
+                });
+
+                // If no muxed streams, add video-only but label them (Client might need to know)
+                // For simplicity, we just look for best muxed.
+                // Piped usually provides webm/mp4 muxed.
+            }
+
+            // Audio Streams
+            if (data.audioStreams) {
+                const bestAudio = data.audioStreams.find((s: any) => s.mimeType === "audio/mp4") || data.audioStreams[0];
+                if (bestAudio) {
+                    formats.push({
+                        quality: "Highest",
+                        type: "mp3",
+                        label: "Audio Only",
+                        url: bestAudio.url,
+                        isAudio: true,
+                        direct: true
+                    });
+                }
+            }
+
+            // Fallback formats if empty (shouldn't happen on Piped usually)
+            if (formats.length === 0) {
+                formats.push({ quality: "720p", type: "mp4", label: "Standard", url: "", direct: false });
+            }
+
+            return NextResponse.json({
+                title: data.title,
+                thumbnail: data.thumbnailUrl,
+                duration: formatDuration(data.duration),
+                author: data.uploader,
+                formats: formats
+            });
         }
+
+        // Fallback to youtube-dl-exec for other sites (Likely to fail on Vercel without binary)
+        console.log("Not a YouTube URL, trying youtube-dl-exec");
+        const binaryPath = getBinaryPath();
+        const youtubedl = binaryPath ? create(binaryPath) : create(path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'));
+
+        const output = await youtubedl(url, {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            preferFreeFormats: true,
+        });
+
+        const options = [
+            { quality: "1080p", type: "mp4", label: "High Definition" },
+            { quality: "720p", type: "mp4", label: "Standard HD" },
+            { quality: "480p", type: "mp4", label: "Standard" },
+            { quality: "Highest", type: "mp3", label: "High Quality Audio", isAudio: true },
+        ];
+
+        return NextResponse.json({
+            title: output.title,
+            thumbnail: output.thumbnail,
+            duration: formatDuration(output.duration),
+            author: output.uploader,
+            formats: options
+        });
+
+    } catch (error: any) {
 
     } catch (error: any) {
         console.error("Error fetching video info:", error);
