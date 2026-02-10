@@ -153,8 +153,6 @@ export async function GET(request: Request) {
         });
 
     } catch (error: any) {
-
-    } catch (error: any) {
         console.error("Error fetching video info:", error);
         return NextResponse.json({ error: 'Failed to fetch info', details: error.message || error.toString() }, { status: 500 });
     }
