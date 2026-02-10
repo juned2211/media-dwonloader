@@ -1,42 +1,95 @@
-"use client";
+'use client';
+
 import { useState } from "react";
-import { Search, Download, Loader2, Music, Video, Clipboard, ArrowRight, Check, X } from "lucide-react";
+import { Search, Download, Youtube, Loader2, Music, Video, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [videoInfo, setVideoInfo] = useState<any>(null);
   const [error, setError] = useState("");
-
-  // Download State
+  const [videoInfo, setVideoInfo] = useState<any>(null);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState("");
 
-  const handlePaste = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      setUrl(text);
-    } catch (err) {
-      console.error("Failed to read clipboard", err);
-    }
-  };
+  // List of public Cobalt instances to try (Client-side to bypass Vercel IP block)
+  const COBALT_INSTANCES = [
+    'https://api.cobalt.tools',
+    'https://cobalt.canine.tools',
+    'https://cobalt.meowing.de',
+    'https://cobalt.xyx.host',
+    'https://cobalt.synn.cc',
+    'https://api.server.social',
+    // Fallbacks
+    'https://cobalt.kwiatekmiki.pl',
+    'https://cobalt.noway.cc',
+    'https://cobalt.defnot001.com',
+    'https://cobalt.darkness.services',
+    'https://cobalt.femboy.beauty',
+    'https://dl.khub.net'
+  ];
 
-  const handleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSearch = async () => {
     if (!url) return;
-
     setLoading(true);
     setError("");
     setVideoInfo(null);
 
+    // Try Client-Side Cobalt first for YouTube (Bypasses Vercel)
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      console.log("Attempting Client-Side Cobalt fetch...");
+      for (const instance of COBALT_INSTANCES) {
+        try {
+          console.log(`Trying ${instance}...`);
+          // Try v10 API
+          const response = await axios.post(`${instance}/`, {
+            url: url,
+            vQuality: "720",
+            filenamePattern: "basic"
+          }, {
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }
+          });
+
+          const data = response.data;
+          if (data && (data.url || data.status === 'stream' || data.status === 'redirect' || data.status === 'picker')) {
+            console.log("Cobalt fetch success!", data);
+
+            // Map Cobalt response to our app's format
+            // If picker, we might need more logic, but basic implementation:
+            const videoUrl = data.url || (data.picker && data.picker[0]?.url);
+
+            if (videoUrl) {
+              setVideoInfo({
+                title: data.filename || "Video Found",
+                thumbnail: "https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=1000&auto=format&fit=crop", // Placeholder or fetch actual thumb if available
+                duration: "Unknown",
+                author: "YouTube",
+                formats: [
+                  { quality: "720p", type: "mp4", label: "Download MP4", url: videoUrl, direct: true },
+                  { quality: "Audio", type: "mp3", label: "Download Audio", url: videoUrl, isAudio: true, direct: true }
+                ]
+              });
+              setLoading(false);
+              return; // Success! Stop here.
+            }
+          }
+        } catch (err) {
+          console.log(`Failed ${instance}`);
+          // Continue to next instance
+        }
+      }
+      console.log("All Client-Side Cobalt instances failed. Falling back to Server...");
+      // If we are here, client-side failed. Fallback to server below.
+      // But server is likely blocked too. We might want to show specific error.
+    }
+
+    // Fallback to our Vercel Backend (Original Logic)
     try {
       const response = await axios.get(`/api/info?url=${encodeURIComponent(url)}`);
       setVideoInfo(response.data);
     } catch (err: any) {
-      const errorMessage = err.response?.data?.details || err.response?.data?.error || "Could not load video. Check the link.";
+      const errorMessage = err.response?.data?.details || err.response?.data?.error || "Could not load video. Server might be blocked by YouTube.";
       setError(errorMessage);
       console.error(err);
     } finally {
@@ -45,234 +98,203 @@ export default function Home() {
   };
 
   const handleDownload = async (format: any) => {
-    setDownloading(true);
-    setProgress(0);
-    setStatus("Initializing...");
-
     try {
-      const downloadUrl = `/api/download?url=${encodeURIComponent(url)}&type=${format.type}&quality=${format.quality}`;
+      setDownloading(true);
+      setProgress(10);
 
-      const response = await axios.get(downloadUrl, {
-        responseType: 'blob',
-        onDownloadProgress: (progressEvent) => {
-          const total = progressEvent.total;
-          if (total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / total);
-            setProgress(percentCompleted);
-            setStatus(percentCompleted < 100 ? "Downloading..." : "Finalizing...");
-          } else {
-            // Fallback if no content-length
-            setStatus("Downloading...");
-            // Fake progress for visual feedback if total is unknown
-            setProgress((old) => (old < 90 ? old + 5 : old));
-          }
-        }
-      });
+      // If direct Cobalt URL, download directly
+      if (format.direct) {
+        const link = document.createElement('a');
+        link.href = format.url;
+        link.target = '_blank';
+        link.download = videoInfo.title || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setDownloading(false);
+        setProgress(100);
+        setTimeout(() => setProgress(0), 1000);
+        return;
+      }
 
-      // Create a link to download the blob
-      const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      // Try to get filename from headers if possible, otherwise generate one
-      const filename = `download.${format.type}`;
-      link.setAttribute('download', filename);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(blobUrl);
+      // Existing Server Logic
+      const response = await fetch(`/api/download?url=${encodeURIComponent(url)}&type=${format.type}&quality=${format.quality}`);
+      if (!response.ok) throw new Error('Download failed');
 
-      setStatus("Complete!");
-      setTimeout(() => setDownloading(false), 2000);
+      const reader = response.body?.getReader();
+      const contentLength = +response.headers.get('Content-Length')!;
+      let receivedLength = 0;
 
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader!.read();
+        if (done) break;
+        chunks.push(value);
+        receivedLength += value.length;
+        setProgress(Math.round((receivedLength / contentLength) * 100));
+      }
+
+      const blob = new Blob(chunks);
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `${videoInfo.title}.${format.type}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      setDownloading(false);
+      setTimeout(() => setProgress(0), 2000);
     } catch (err) {
-      console.error("Download failed", err);
-      setStatus("Failed");
-      setTimeout(() => setDownloading(false), 2000);
+      setError("Download failed. Please try again.");
+      console.error(err);
+      setDownloading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center bg-[#0f172a] text-slate-100 font-sans selection:bg-blue-500/30">
+    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-140px)] p-4 text-center space-y-8">
 
-      {/* Mobile-first Container */}
-      <div className="w-full max-w-md min-h-screen flex flex-col p-6 relative z-10">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="space-y-4 max-w-2xl"
+      >
+        <h1 className="text-4xl md:text-6xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
+          MediaLoader
+        </h1>
+        <p className="text-xl text-gray-400">
+          Download video & audio in seconds
+        </p>
+      </motion.div>
 
-        {/* Header / Intro */}
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mt-8 mb-8 text-center"
-        >
-          <h1 className="text-2xl font-bold tracking-tight text-white mb-2">
-            Media<span className="text-blue-500">Loader</span>
-          </h1>
-          <p className="text-sm text-slate-400">Download video & audio in seconds</p>
-        </motion.div>
-
-        {/* Top Section: URL Input */}
-        <div className="mb-8">
-          <div className="relative group">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.2 }}
+        className="w-full max-w-xl space-y-4"
+      >
+        <div className="relative group">
+          <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 rounded-xl blur-xl group-hover:blur-2xl transition-all" />
+          <div className="relative flex items-center bg-gray-900/80 backdrop-blur-xl border border-white/10 rounded-xl p-2 shadow-2xl">
+            <Search className="ml-3 w-5 h-5 text-gray-400" />
             <input
               type="text"
+              placeholder="Paste YouTube, TikTok, Instagram link..."
+              className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-gray-500 p-3"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste YouTube link..."
-              className="w-full pl-4 pr-12 py-4 rounded-2xl glass-input text-sm font-medium placeholder-slate-500 focus:ring-2 focus:ring-blue-500 transition-all shadow-lg shadow-black/20"
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             />
             <button
-              onClick={() => { if (!url) handlePaste(); else handleSearch(); }}
-              className="absolute right-2 top-2 bottom-2 aspect-square rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition-colors shadow-lg shadow-blue-500/20"
+              onClick={handleSearch}
+              disabled={loading || !url}
+              className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white px-6 py-2 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-cyan-500/20"
             >
-              {url ? <ArrowRight className="w-5 h-5" /> : <Clipboard className="w-5 h-5" />}
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Start"}
             </button>
           </div>
-          {error && <p className="text-red-400 text-xs mt-3 text-center bg-red-500/10 py-2 rounded-lg">{error}</p>}
         </div>
 
-        {/* Middle & Bottom Sections */}
-        <div className="flex-1 flex flex-col">
-          {loading && (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-500 animate-pulse">
-              <Loader2 className="w-8 h-8 animate-spin mb-4 text-blue-500" />
-              <p className="text-xs font-medium tracking-wide">FETCHING INFO...</p>
-            </div>
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl flex items-center gap-3"
+            >
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <p className="text-sm">{error}</p>
+            </motion.div>
           )}
+        </AnimatePresence>
+      </motion.div>
 
-          <AnimatePresence>
-            {videoInfo && !loading && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="flex flex-col gap-6"
-              >
-                {/* Preview Card */}
-                <div className="glass-card p-4 shadow-xl shadow-black/20 overflow-hidden relative">
-                  <div className="aspect-video w-full rounded-xl overflow-hidden mb-4 relative bg-black/50">
-                    <img src={videoInfo.thumbnail} alt="Thumbnail" className="w-full h-full object-cover" />
-                    <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-1 rounded text-[10px] font-bold text-white backdrop-blur-sm">
-                      {videoInfo.duration}
-                    </div>
-                  </div>
-                  <h2 className="text-sm font-bold text-white leading-snug line-clamp-2 mb-1">
-                    {videoInfo.title}
-                  </h2>
-                  <p className="text-xs text-slate-400">{videoInfo.author}</p>
-                </div>
-
-                {/* Download Buttons */}
-                <div className="flex flex-col gap-4">
-                  {/* MP4 Section */}
-                  <div>
-                    <div className="flex items-center gap-2 mb-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      <Video className="w-3 h-3" /> <span>Video (MP4)</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      {videoInfo.formats.filter((f: any) => !f.isAudio).map((fmt: any, i: number) => (
-                        <button
-                          key={i}
-                          onClick={() => handleDownload(fmt)}
-                          className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800/50 hover:bg-blue-600/20 border border-white/5 hover:border-blue-500/50 transition-all group"
-                        >
-                          <span className="text-sm font-bold text-white group-hover:text-blue-400">{fmt.quality}</span>
-                          <span className="text-[10px] text-slate-500 group-hover:text-blue-300/70">MP4</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* MP3 Section */}
-                  <div>
-                    <div className="flex items-center gap-2 mb-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      <Music className="w-3 h-3" /> <span>Audio (MP3)</span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3">
-                      {videoInfo.formats.filter((f: any) => f.isAudio).map((fmt: any, i: number) => (
-                        <button
-                          key={i}
-                          onClick={() => handleDownload(fmt)}
-                          className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-blue-600/10 to-blue-600/5 hover:from-blue-600/20 hover:to-blue-600/10 border border-blue-500/20 transition-all group"
-                        >
-                          <div className="flex flex-col items-start bg-transparent">
-                            <span className="text-sm font-bold text-blue-400 group-hover:text-blue-300">{fmt.label}</span>
-                            <span className="text-[10px] text-slate-400">High Quality 320kbps</span>
-                          </div>
-                          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center shadow-lg shadow-blue-500/30 group-hover:scale-110 transition-transform">
-                            <Download className="w-4 h-4 text-white" />
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+      <AnimatePresence>
+        {videoInfo && (
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 40 }}
+            className="w-full max-w-xl"
+          >
+            <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+              <div className="p-6 border-b border-white/5 flex gap-6 items-start">
+                <img
+                  src={videoInfo.thumbnail}
+                  alt={videoInfo.title}
+                  className="w-32 h-24 object-cover rounded-lg shadow-lg bg-gray-800"
+                />
+                <div className="text-left space-y-2 flex-1">
+                  <h3 className="font-semibold text-lg line-clamp-2 leading-tight">{videoInfo.title}</h3>
+                  <div className="flex gap-4 text-sm text-gray-400">
+                    <span>{videoInfo.duration}</span>
+                    <span>•</span>
+                    <span>{videoInfo.author}</span>
                   </div>
                 </div>
+              </div>
 
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+              <div className="p-4 bg-black/20 space-y-3">
+                {videoInfo.formats.map((format: any, index: number) => (
+                  <div key={index} className="flex items-center justify-between bg-white/5 hover:bg-white/10 p-3 rounded-lg transition-colors group">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-full ${format.isAudio ? 'bg-purple-500/20 text-purple-400' : 'bg-cyan-500/20 text-cyan-400'}`}>
+                        {format.isAudio ? <Music className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                      </div>
+                      <div className="text-left">
+                        <p className="font-medium">{format.label}</p>
+                        <p className="text-xs text-gray-500">{format.quality} • {format.type.toUpperCase()}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDownload(format)}
+                      disabled={downloading}
+                      className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                    >
+                      <Download className="w-5 h-5 text-gray-400 group-hover:text-white" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        {/* Footer */}
-        <div className="mt-8 text-center py-4 border-t border-white/5">
-          <p className="text-[10px] text-slate-600 mb-2">Secure & Private Download</p>
-          <p className="text-xs text-slate-500 font-medium">Made by Juned</p>
-        </div>
-      </div>
-
-      {/* Download Modal */}
+      {/* Progress Modal */}
       <AnimatePresence>
         {downloading && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
           >
             <motion.div
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="glass-panel w-full max-w-sm rounded-2xl p-6 shadow-2xl relative"
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              className="bg-gray-900 border border-white/10 p-8 rounded-2xl w-full max-w-sm text-center space-y-6 shadow-2xl"
             >
-              <button onClick={() => setDownloading(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="text-center mb-6">
-                <h3 className="text-xl font-bold text-white mb-1">Processing...</h3>
-                <p className="text-sm text-slate-400">Please wait while we prepare your file.</p>
+              <Loader2 className="w-12 h-12 animate-spin mx-auto text-cyan-400" />
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold">Downloading...</h3>
+                <p className="text-gray-400 text-sm">Please wait while we process your media</p>
               </div>
 
-              <div className="mb-2 flex justify-between text-xs font-medium text-slate-300">
-                <span>{status}</span>
-                <span>{progress}%</span>
-              </div>
-              <div className="h-2 w-full bg-slate-700 rounded-full overflow-hidden mb-6">
+              <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
                 <motion.div
-                  className="h-full bg-blue-500"
+                  className="h-full bg-gradient-to-r from-cyan-500 to-purple-500"
                   initial={{ width: 0 }}
                   animate={{ width: `${progress}%` }}
-                  transition={{ type: "spring", stiffness: 50, damping: 20 }}
                 />
               </div>
-
-              {status === "Complete!" && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex items-center justify-center gap-2 text-green-400 font-bold"
-                >
-                  <Check className="w-5 h-5" />
-                  <span>Download Started!</span>
-                </motion.div>
-              )}
+              <p className="text-xs text-gray-500 font-mono">{progress}%</p>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Ambient Background Glows */}
-      <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/10 rounded-full blur-[100px] pointer-events-none" />
-
-    </main>
+    </div>
   );
 }
