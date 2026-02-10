@@ -155,7 +155,7 @@ export default function Home() {
     // 3. Fallback to Vercel Backend
     logToDebug("All Client-Side APIs failed. Falling back to Server...");
     try {
-      const response = await axios.get(`/api/info?url=${encodeURIComponent(url)}`);
+      const response = await axios.get(`/api/info?url=${encodeURIComponent(cleanUrl)}`);
       setVideoInfo(response.data);
     } catch (err: any) {
       const errorMessage = err.response?.data?.details || err.response?.data?.error || "Could not load video. Check the link.";
