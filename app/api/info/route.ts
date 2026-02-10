@@ -111,7 +111,7 @@ export async function GET(request: Request) {
             });
         } finally {
             try {
-                process.chdir(originalCwd);
+                if (originalCwd) process.chdir(originalCwd);
             } catch (err) {
                 console.log("Could not restore cwd", err);
             }
