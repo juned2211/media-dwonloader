@@ -44,12 +44,23 @@ export async function GET(request: Request) {
             console.log("Detected YouTube URL for download, using @distube/ytdl-core");
 
             let downloadStream;
+            const requestOptions = {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            };
 
             if (type === 'mp3') {
                 // For audio, we strictly want existing audio formats. 
                 // Merging is complex in pure node without ffmpeg binary. 
                 // So we get the best audio distinct format.
-                downloadStream = ytdl(url, { quality: 'highestaudio', filter: 'audioonly' });
+                downloadStream = ytdl(url, {
+                    quality: 'highestaudio',
+                    filter: 'audioonly',
+                    requestOptions: requestOptions
+                });
             } else {
                 // For video, we try to get a combinable format if possible, 
                 // but without ffmpeg locally on Vercel, we can only safely download 
@@ -61,7 +72,11 @@ export async function GET(request: Request) {
 
                 // Note: 1080p on YT is almost always adaptive (video only), so we might get 720p here.
                 // This is a tradeoff for serverless without ffmpeg.
-                downloadStream = ytdl(url, { quality: 'highest', filter: 'audioandvideo' });
+                downloadStream = ytdl(url, {
+                    quality: 'highest',
+                    filter: 'audioandvideo',
+                    requestOptions: requestOptions
+                });
             }
 
             // Convert Node stream to Web stream
