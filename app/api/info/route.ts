@@ -49,19 +49,19 @@ export async function GET(request: Request) {
                 console.log("Detected YouTube URL, using @distube/ytdl-core");
 
                 // Add robust options for Vercel/Serverless environment
-                const agent = ytdl.createAgent([
-                    { name: "POT_VISITOR_INFO_1_LIVE", value: "V2fP9J9_jXo" },
-                    { name: "YSC", value: "C7F8d39X5k" },
-                    { name: "GPS", value: "1" }
-                ]);
-
+                // Attempting full desktop headers without cookies first
                 const info = await ytdl.getInfo(url, {
-                    agent,
                     requestOptions: {
                         headers: {
-                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                             'Accept-Language': 'en-US,en;q=0.9',
+                            'Sec-Fetch-Dest': 'document',
+                            'Sec-Fetch-Mode': 'navigate',
+                            'Sec-Fetch-Site': 'none',
+                            'Sec-Fetch-User': '?1',
+                            'Upgrade-Insecure-Requests': '1',
+                            'Cache-Control': 'max-age=0',
                         }
                     }
                 });
