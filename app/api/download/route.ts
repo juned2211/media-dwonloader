@@ -66,6 +66,7 @@ export async function GET(request: Request) {
                 downloadStream = ytdl(url, {
                     quality: 'highestaudio',
                     filter: 'audioonly',
+                    agent,
                     requestOptions: requestOptions
                 });
             } else {
@@ -82,6 +83,7 @@ export async function GET(request: Request) {
                 downloadStream = ytdl(url, {
                     quality: 'highest',
                     filter: 'audioandvideo',
+                    agent,
                     requestOptions: requestOptions
                 });
             }
