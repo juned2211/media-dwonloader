@@ -60,17 +60,26 @@ export default function Home() {
     setError("");
     setVideoInfo(null);
     setDebugLogs([]); // Clear logs for new search
-    logToDebug(`Starting fetch for: ${url}`);
+
+    // Sanitize URL (Remove tracking parameters like ?si=)
+    let cleanUrl = url.trim();
+    if (cleanUrl.includes("youtu.be/")) {
+      cleanUrl = cleanUrl.split("?")[0];
+    } else if (cleanUrl.includes("youtube.com/watch")) {
+      cleanUrl = cleanUrl.split("&")[0];
+    }
+
+    logToDebug(`Starting fetch for: ${cleanUrl}`);
 
     // 1. Try Client-Side Cobalt for YouTube
-    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    if (cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be')) {
       logToDebug("Attempting Client-Side Cobalt fetch...");
       for (const instance of COBALT_INSTANCES) {
         try {
           // Try v10 API
-          logToDebug(`Trying Cobalt: ${instance}`);
+          // logToDebug(`Trying Cobalt: ${instance}`);
           const response = await axios.post(`${instance}/`, {
-            url: url,
+            url: cleanUrl,
             vQuality: "720",
             filenamePattern: "basic"
           }, {
@@ -109,12 +118,12 @@ export default function Home() {
         try {
           // Extract Video ID
           let videoId = "";
-          if (url.includes("v=")) {
-            videoId = url.split("v=")[1].split("&")[0];
-          } else if (url.includes("youtu.be/")) {
-            videoId = url.split("youtu.be/")[1].split("?")[0];
-          } else if (url.includes("shorts/")) {
-            videoId = url.split("shorts/")[1].split("?")[0];
+          if (cleanUrl.includes("v=")) {
+            videoId = cleanUrl.split("v=")[1].split("&")[0];
+          } else if (cleanUrl.includes("youtu.be/")) {
+            videoId = cleanUrl.split("youtu.be/")[1].split("?")[0];
+          } else if (cleanUrl.includes("shorts/")) {
+            videoId = cleanUrl.split("shorts/")[1].split("?")[0];
           }
 
           if (videoId) {
