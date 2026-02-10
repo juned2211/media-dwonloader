@@ -51,36 +51,43 @@ export async function GET(request: Request) {
             if (!videoId) throw new Error("Could not extract Video ID");
 
             // Definition of Proxy APIs
+            // Use a diverse list to increase uptime probability on Vercel
             const PROXIES = [
-                // 1. Piped Instances (Try these first)
-                {
-                    type: 'piped',
-                    url: 'https://pipedapi.kavin.rocks',
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-                },
-                {
-                    type: 'piped',
-                    url: 'https://api.piped.video',
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-                },
-                {
-                    type: 'piped',
-                    url: 'https://pipedapi.tokhmi.xyz',
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
-                },
+                // 1. Piped Instances (Try these first - they are usually faster)
+                { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
+                { type: 'piped', url: 'https://api.piped.video' },
+                { type: 'piped', url: 'https://pipedapi.tokhmi.xyz' },
+                { type: 'piped', url: 'https://pipedapi.moomoo.me' },
+                { type: 'piped', url: 'https://api.piped.projectsegfau.lt' },
+                { type: 'piped', url: 'https://pipedapi.ducks.party' },
+                { type: 'piped', url: 'https://api.piped.privacy.com.de' },
+                { type: 'piped', url: 'https://api.piped.r4fo.com' },
+                { type: 'piped', url: 'https://pipedapi.adminforge.de' },
+                { type: 'piped', url: 'https://pipedapi.smnz.de' },
+
                 // 2. Invidious Instances (Fallback)
                 { type: 'invidious', url: 'https://inv.nadeko.net' },
                 { type: 'invidious', url: 'https://yewtu.be' },
                 { type: 'invidious', url: 'https://invidious.privacydev.net' },
-                { type: 'invidious', url: 'https://invidious.drgns.space' }
+                { type: 'invidious', url: 'https://invidious.drgns.space' },
+                { type: 'invidious', url: 'https://invidious.lunar.icu' },
+                { type: 'invidious', url: 'https://invidious.projectsegfau.lt' },
+                { type: 'invidious', url: 'https://invidious.fdn.fr' },
+                { type: 'invidious', url: 'https://vid.puffyan.us' },
+                { type: 'invidious', url: 'https://invidious.flokinet.to' }
             ];
+
+            const HEADERS = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            };
 
             let data;
             let usedProxyType = '';
+            let lastError = '';
 
             for (const proxy of PROXIES) {
                 try {
-                    console.log(`Fetching from ${proxy.type} (${proxy.url})...`);
+                    // console.log(`Fetching from ${proxy.type} (${proxy.url})...`); // Comment out to reduce noise if needed
 
                     let fetchUrl = '';
                     if (proxy.type === 'piped') {
@@ -89,23 +96,36 @@ export async function GET(request: Request) {
                         fetchUrl = `${proxy.url}/api/v1/videos/${videoId}`;
                     }
 
+                    // Set timeout to avoid hanging on slow instances
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds per try
+
                     const response = await fetch(fetchUrl, {
-                        headers: proxy.headers || {}
+                        headers: HEADERS,
+                        signal: controller.signal
                     });
+                    clearTimeout(timeoutId);
 
                     if (response.ok) {
                         data = await response.json();
+
+                        // Validate data structure 
+                        if (proxy.type === 'piped' && !data.title) throw new Error("Invalid Piped response");
+                        if (proxy.type === 'invidious' && !data.title) throw new Error("Invalid Invidious response");
+
                         usedProxyType = proxy.type;
                         break;
                     } else {
-                        console.log(`Failed ${proxy.url}: ${response.status}`);
+                        // console.log(`Failed ${proxy.url}: ${response.status}`);
+                        lastError = `Failed ${proxy.url}: ${response.status}`;
                     }
-                } catch (e) {
-                    console.log(`Error connecting to ${proxy.url}:`, e);
+                } catch (e: any) {
+                    console.error(`Error connecting to ${proxy.url}: ${e.message}`);
+                    lastError = `Error connecting to ${proxy.url}: ${e.message}`;
                 }
             }
 
-            if (!data) throw new Error("All Proxy APIs (Piped & Invidious) failed.");
+            if (!data) throw new Error(`All Proxy APIs failed. Last error: ${lastError}`);
 
             // Map Response based on Proxy Type
             const formats: any[] = [];
