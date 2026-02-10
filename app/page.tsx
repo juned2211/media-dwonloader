@@ -10,6 +10,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [videoInfo, setVideoInfo] = useState<any>(null);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
   // Download State
   const [downloading, setDownloading] = useState(false);
@@ -38,6 +39,11 @@ export default function Home() {
     'https://api.piped.video',
   ];
 
+  const logToDebug = (msg: string) => {
+    console.log(msg);
+    setDebugLogs(prev => [`${new Date().toLocaleTimeString()}: ${msg}`, ...prev]);
+  };
+
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -53,13 +59,16 @@ export default function Home() {
     setLoading(true);
     setError("");
     setVideoInfo(null);
+    setDebugLogs([]); // Clear logs for new search
+    logToDebug(`Starting fetch for: ${url}`);
 
     // 1. Try Client-Side Cobalt for YouTube
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
-      console.log("Attempting Client-Side Cobalt fetch...");
+      logToDebug("Attempting Client-Side Cobalt fetch...");
       for (const instance of COBALT_INSTANCES) {
         try {
           // Try v10 API
+          logToDebug(`Trying Cobalt: ${instance}`);
           const response = await axios.post(`${instance}/`, {
             url: url,
             vQuality: "720",
@@ -70,7 +79,7 @@ export default function Home() {
 
           const data = response.data;
           if (data && (data.url || data.status === 'stream' || data.status === 'redirect' || data.status === 'picker')) {
-            console.log("Cobalt fetch success!", data);
+            logToDebug(`Cobalt Success! ${data.status}`);
 
             const videoUrl = data.url || (data.picker && data.picker[0]?.url);
 
@@ -89,11 +98,11 @@ export default function Home() {
               return;
             }
           }
-        } catch (err) {
-          // console.log(`Failed ${instance}`);
+        } catch (err: any) {
+          logToDebug(`Cobalt Failed ${instance}: ${err.message}`);
         }
       }
-      console.log("Cobalt failed. Trying Piped...");
+      logToDebug("All Cobalt instances failed. Trying Piped...");
 
       // 2. Try Client-Side Piped API
       for (const instance of PIPED_INSTANCES) {
@@ -109,11 +118,12 @@ export default function Home() {
           }
 
           if (videoId) {
-            console.log(`Testing Piped: ${instance}/streams/${videoId}`);
+            logToDebug(`Testing Piped: ${instance}/streams/${videoId}`);
             const response = await axios.get(`${instance}/streams/${videoId}`);
             const data = response.data;
 
             if (data && data.videoStreams && data.videoStreams.length > 0) {
+              logToDebug("Piped Success!");
               // Filter for 720p or highest
               const bestVideo = data.videoStreams.find((s: any) => s.quality === "1080p" && !s.videoOnly) ||
                 data.videoStreams.find((s: any) => s.quality === "720p" && !s.videoOnly) ||
@@ -136,20 +146,21 @@ export default function Home() {
               return;
             }
           }
-        } catch (err) {
-          console.log(`Piped failed ${instance}`);
+        } catch (err: any) {
+          logToDebug(`Piped failed ${instance}: ${err.message}`);
         }
       }
     }
 
     // 3. Fallback to Vercel Backend
-    console.log("All Client-Side APIs failed. Falling back to Server...");
+    logToDebug("All Client-Side APIs failed. Falling back to Server...");
     try {
       const response = await axios.get(`/api/info?url=${encodeURIComponent(url)}`);
       setVideoInfo(response.data);
     } catch (err: any) {
       const errorMessage = err.response?.data?.details || err.response?.data?.error || "Could not load video. Check the link.";
       setError(errorMessage);
+      logToDebug(`Server Error: ${errorMessage}`);
       console.error(err);
     } finally {
       setLoading(false);
@@ -252,6 +263,18 @@ export default function Home() {
           </div>
           {error && <p className="text-red-400 text-xs mt-3 text-center bg-red-500/10 py-2 rounded-lg">{error}</p>}
         </div>
+
+        {/* Debug Console */}
+        {loading || debugLogs.length > 0 ? (
+          <div className="mb-4 p-3 bg-black/40 rounded-lg border border-white/5 max-h-40 overflow-y-auto font-mono text-[10px]">
+            <p className="text-gray-500 mb-1 sticky top-0 bg-black/40 backdrop-blur w-full">System Logs:</p>
+            {debugLogs.map((log, i) => (
+              <div key={i} className={`mb-1 ${log.includes("Success") ? "text-green-400" : log.includes("Failed") || log.includes("Error") ? "text-red-400" : "text-blue-300"}`}>
+                {log}
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {/* Middle & Bottom Sections */}
         <div className="flex-1 flex flex-col">
