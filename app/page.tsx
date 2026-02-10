@@ -35,8 +35,9 @@ export default function Home() {
     try {
       const response = await axios.get(`/api/info?url=${encodeURIComponent(url)}`);
       setVideoInfo(response.data);
-    } catch (err) {
-      setError("Could not load video. Check the link.");
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.details || err.response?.data?.error || "Could not load video. Check the link.";
+      setError(errorMessage);
       console.error(err);
     } finally {
       setLoading(false);
